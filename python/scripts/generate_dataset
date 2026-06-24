@@ -1,0 +1,342 @@
+"""
+Fintech Feature Adoption Dataset Generator
+Creates realistic UPI/wallet user behavior data with deliberate signal structure
+"""
+
+import pandas as pd
+import numpy as np
+from faker import Faker
+from datetime import datetime, timedelta
+import random
+import os
+import json
+from tqdm import tqdm
+
+# Initialize
+fake = Faker('en_IN')  # Indian locale for realistic data
+Faker.seed(42)
+np.random.seed(42)
+random.seed(42)
+
+# Constants
+NUM_USERS = 10000
+NUM_EVENTS = 51586
+START_DATE = datetime(2025, 12, 1)
+END_DATE = datetime(2026, 3, 1)
+
+# Feature adoption probabilities
+FEATURE_PROBABILITIES = {
+    'autopay': 0.225,
+    'rewards': 0.298,
+    'upi_lite': 0.186,
+    'bill_pay': 0.35,
+}
+
+# City distribution
+CITIES = ['Mumbai', 'Delhi', 'Bangalore', 'Hyderabad', 'Chennai', 
+          'Pune', 'Kolkata', 'Ahmedabad', 'Surat', 'Jaipur']
+CITY_WEIGHTS = [0.18, 0.15, 0.14, 0.12, 0.10, 0.09, 0.08, 0.06, 0.05, 0.03]
+
+def log_message(message):
+    """Simple logging function"""
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}")
+
+def generate_users(n=NUM_USERS):
+    """Generate user table with realistic demographics and behavior"""
+    
+    log_message(f"Generating {n} users...")
+    
+    users = []
+    for i in tqdm(range(n), desc="Creating users"):
+        # Demographics
+        age = random.randint(18, 65)
+        gender = random.choice(['M', 'F'])
+        city = random.choices(CITIES, weights=CITY_WEIGHTS)[0]
+        device = random.choices(['Android', 'iOS'], weights=[0.72, 0.28])[0]
+        
+        # Signup date (spread over 90 days)
+        days_ago = np.random.exponential(scale=30)
+        signup_date = END_DATE - timedelta(days=int(min(days_ago, 89)))
+        
+        # Feature adoption with correlations
+        autopay = np.random.random() < FEATURE_PROBABILITIES['autopay']
+        
+        rewards_prob = FEATURE_PROBABILITIES['rewards']
+        if autopay:
+            rewards_prob += 0.10
+        rewards = np.random.random() < rewards_prob
+        
+        upi_lite_prob = FEATURE_PROBABILITIES['upi_lite']
+        if rewards:
+            upi_lite_prob += 0.05
+        upi_lite = np.random.random() < upi_lite_prob
+        
+        bill_pay_prob = FEATURE_PROBABILITIES['bill_pay']
+        if autopay or rewards or upi_lite:
+            bill_pay_prob += 0.08
+        bill_pay = np.random.random() < bill_pay_prob
+        
+        # Transaction behavior - CRITICAL SIGNAL
+        if autopay:
+            # AutoPay users: 5x more transactions
+            transaction_count = max(1, int(np.random.poisson(9)))
+            avg_transaction = random.randint(300, 1500)
+            total_spend = transaction_count * avg_transaction
+        else:
+            # Non-AutoPay users: baseline
+            transaction_count = max(0, int(np.random.poisson(1.8)))
+            avg_transaction = random.randint(100, 800)
+            total_spend = transaction_count * avg_transaction
+        
+        # KYC status (78% completion)
+        kyc_completed = np.random.random() < 0.78
+        kyc_date = None
+        if kyc_completed:
+            kyc_date = signup_date + timedelta(days=random.randint(1, 14))
+            if kyc_date > END_DATE:
+                kyc_date = END_DATE - timedelta(days=random.randint(1, 5))
+        
+        # First transaction (66.3% of all users)
+        has_transaction = np.random.random() < 0.663
+        first_transaction_date = None
+        if has_transaction and kyc_completed:
+            first_transaction_date = kyc_date + timedelta(days=random.randint(1, 7))
+            if first_transaction_date > END_DATE:
+                first_transaction_date = END_DATE - timedelta(days=random.randint(1, 3))
+        
+        features_adopted = sum([autopay, rewards, upi_lite, bill_pay])
+        
+        user = {
+            'user_id': f'USER_{i+1:05d}',
+            'age': age,
+            'gender': gender,
+            'city': city,
+            'device_type': device,
+            'signup_date': signup_date,
+            'kyc_date': kyc_date,
+            'kyc_completed': kyc_completed,
+            'first_transaction_date': first_transaction_date,
+            'has_transaction': has_transaction,
+            'autopay_adopted': autopay,
+            'rewards_adopted': rewards,
+            'upi_lite_adopted': upi_lite,
+            'bill_pay_adopted': bill_pay,
+            'features_adopted': features_adopted,
+            'transaction_count': transaction_count,
+            'total_spend': total_spend,
+            'avg_transaction_value': avg_transaction if transaction_count > 0 else 0,
+        }
+        users.append(user)
+    
+    df = pd.DataFrame(users)
+    log_message(f"✅ Generated {len(df)} users")
+    log_message(f"   - KYC completion: {df['kyc_completed'].mean():.1%}")
+    log_message(f"   - AutoPay adoption: {df['autopay_adopted'].mean():.1%}")
+    log_message(f"   - Avg transactions: {df['transaction_count'].mean():.1f}")
+    
+    return df
+
+def generate_events(users_df):
+    """Generate event stream from user behavior"""
+    
+    log_message(f"Generating events for {len(users_df)} users...")
+    
+    events = []
+    event_id = 1
+    
+    for _, user in tqdm(users_df.iterrows(), total=len(users_df), desc="Generating events"):
+        user_id = user['user_id']
+        
+        # 1. Signup event
+        events.append({
+            'event_id': f'EVT_{event_id:06d}',
+            'user_id': user_id,
+            'event_type': 'signup',
+            'timestamp': user['signup_date'],
+            'metadata': json.dumps({'device': user['device_type']})
+        })
+        event_id += 1
+        
+        # 2. KYC event (if completed)
+        if user['kyc_completed'] and pd.notna(user['kyc_date']):
+            events.append({
+                'event_id': f'EVT_{event_id:06d}',
+                'user_id': user_id,
+                'event_type': 'kyc_complete',
+                'timestamp': user['kyc_date'],
+                'metadata': json.dumps({'method': 'video_kyc'})
+            })
+            event_id += 1
+        
+        # 3. First transaction (if exists)
+        if user['has_transaction'] and pd.notna(user['first_transaction_date']):
+            events.append({
+                'event_id': f'EVT_{event_id:06d}',
+                'user_id': user_id,
+                'event_type': 'first_transaction',
+                'timestamp': user['first_transaction_date'],
+                'metadata': json.dumps({'amount': random.randint(50, 5000)})
+            })
+            event_id += 1
+        
+        # 4. Feature adoption events
+        if user['autopay_adopted']:
+            if user['has_transaction'] and pd.notna(user['first_transaction_date']):
+                autopay_date = user['first_transaction_date'] + timedelta(days=random.randint(1, 10))
+            else:
+                autopay_date = user['signup_date'] + timedelta(days=random.randint(10, 30))
+            
+            if autopay_date <= END_DATE:
+                events.append({
+                    'event_id': f'EVT_{event_id:06d}',
+                    'user_id': user_id,
+                    'event_type': 'autopay_setup',
+                    'timestamp': autopay_date,
+                    'metadata': json.dumps({'frequency': 'monthly'})
+                })
+                event_id += 1
+        
+        if user['rewards_adopted']:
+            rewards_date = user['signup_date'] + timedelta(days=random.randint(5, 25))
+            if rewards_date <= END_DATE:
+                events.append({
+                    'event_id': f'EVT_{event_id:06d}',
+                    'user_id': user_id,
+                    'event_type': 'rewards_redemption',
+                    'timestamp': rewards_date,
+                    'metadata': json.dumps({'reward_type': random.choice(['cashback', 'points'])})
+                })
+                event_id += 1
+        
+        if user['upi_lite_adopted']:
+            upi_date = user['signup_date'] + timedelta(days=random.randint(7, 30))
+            if upi_date <= END_DATE:
+                events.append({
+                    'event_id': f'EVT_{event_id:06d}',
+                    'user_id': user_id,
+                    'event_type': 'upi_lite_activation',
+                    'timestamp': upi_date,
+                    'metadata': json.dumps({'balance': random.randint(100, 5000)})
+                })
+                event_id += 1
+        
+        if user['bill_pay_adopted']:
+            bill_date = user['signup_date'] + timedelta(days=random.randint(3, 20))
+            if bill_date <= END_DATE:
+                events.append({
+                    'event_id': f'EVT_{event_id:06d}',
+                    'user_id': user_id,
+                    'event_type': 'bill_payment',
+                    'timestamp': bill_date,
+                    'metadata': json.dumps({'category': random.choice(['electricity', 'mobile', 'gas'])})
+                })
+                event_id += 1
+        
+        # 5. Repeat transactions
+        if user['has_transaction'] and user['transaction_count'] > 1:
+            max_transactions = min(user['transaction_count'] - 1, 20)
+            for t in range(max_transactions):
+                if user['autopay_adopted']:
+                    days_offset = random.randint(3, 7) * (t + 1)
+                else:
+                    days_offset = random.randint(2, 14) * (t + 1)
+                
+                trans_date = user['first_transaction_date'] + timedelta(days=days_offset)
+                
+                if trans_date <= END_DATE:
+                    events.append({
+                        'event_id': f'EVT_{event_id:06d}',
+                        'user_id': user_id,
+                        'event_type': 'repeat_transaction',
+                        'timestamp': trans_date,
+                        'metadata': json.dumps({
+                            'amount': random.randint(50, 5000),
+                            'merchant': fake.company()
+                        })
+                    })
+                    event_id += 1
+    
+    df = pd.DataFrame(events)
+    log_message(f"✅ Generated {len(df)} events")
+    
+    return df
+
+def main():
+    """Main execution"""
+    
+    log_message("=" * 60)
+    log_message("STARTING DATASET GENERATION")
+    log_message("=" * 60)
+    
+    # Ensure directories exist
+    os.makedirs('data/raw', exist_ok=True)
+    os.makedirs('data/processed', exist_ok=True)
+    
+    # Generate users
+    users_df = generate_users()
+    users_df.to_csv('data/raw/users_raw.csv', index=False)
+    log_message(f"💾 Saved users to data/raw/users_raw.csv")
+    
+    # Generate events
+    events_df = generate_events(users_df)
+    events_df.to_csv('data/raw/events_raw.csv', index=False)
+    log_message(f"💾 Saved events to data/raw/events_raw.csv")
+    
+    # Summary statistics
+    log_message("\n" + "=" * 60)
+    log_message("DATASET SUMMARY")
+    log_message("=" * 60)
+    
+    print(f"\n📊 USERS:")
+    print(f"   - Total: {len(users_df):,}")
+    print(f"   - KYC completed: {users_df['kyc_completed'].sum():,} ({users_df['kyc_completed'].mean():.1%})")
+    print(f"   - AutoPay: {users_df['autopay_adopted'].sum():,} ({users_df['autopay_adopted'].mean():.1%})")
+    print(f"   - Rewards: {users_df['rewards_adopted'].sum():,} ({users_df['rewards_adopted'].mean():.1%})")
+    print(f"   - UPI Lite: {users_df['upi_lite_adopted'].sum():,} ({users_df['upi_lite_adopted'].mean():.1%})")
+    print(f"   - Bill Pay: {users_df['bill_pay_adopted'].sum():,} ({users_df['bill_pay_adopted'].mean():.1%})")
+    
+    print(f"\n📈 EVENTS:")
+    print(f"   - Total events: {len(events_df):,}")
+    print(f"   - Event types:")
+    for event_type in events_df['event_type'].unique():
+        count = len(events_df[events_df['event_type'] == event_type])
+        print(f"     • {event_type}: {count:,}")
+    
+    print(f"\n💰 KEY INSIGHTS:")
+    autopay_users = users_df[users_df['autopay_adopted'] == True]
+    non_autopay_users = users_df[users_df['autopay_adopted'] == False]
+    autopay_avg = autopay_users['transaction_count'].mean()
+    non_autopay_avg = non_autopay_users['transaction_count'].mean()
+    print(f"   - AutoPay avg transactions: {autopay_avg:.1f}")
+    print(f"   - Non-AutoPay avg transactions: {non_autopay_avg:.1f}")
+    print(f"   - Multiplier: {autopay_avg / non_autopay_avg:.1f}x")
+    
+    # Save metadata
+    metadata = {
+        'generated_at': datetime.now().isoformat(),
+        'num_users': len(users_df),
+        'num_events': len(events_df),
+        'date_range': {
+            'start': events_df['timestamp'].min().isoformat(),
+            'end': events_df['timestamp'].max().isoformat()
+        },
+        'feature_adoption_rates': {
+            'autopay': float(users_df['autopay_adopted'].mean()),
+            'rewards': float(users_df['rewards_adopted'].mean()),
+            'upi_lite': float(users_df['upi_lite_adopted'].mean()),
+            'bill_pay': float(users_df['bill_pay_adopted'].mean())
+        },
+        'autopay_transaction_multiplier': float(autopay_avg / non_autopay_avg)
+    }
+    
+    with open('data/metadata.json', 'w') as f:
+        json.dump(metadata, f, indent=2, default=str)
+    
+    log_message("\n" + "=" * 60)
+    log_message("✅ DATASET GENERATION COMPLETE!")
+    log_message("=" * 60)
+    
+    return users_df, events_df
+
+if __name__ == "__main__":
+    users_df, events_df = main()

@@ -15,14 +15,17 @@ A comprehensive product analytics project analyzing feature adoption patterns in
 
 ### Page 1: Product Health Dashboard
 ![Product Health](dashboard/screenshots/page1_product_health.png)
+
 *Executive summary with 8 KPIs, DAU trend, feature adoption, and ARPU analysis*
 
 ### Page 2: Adoption Funnel
 ![Adoption Funnel](dashboard/screenshots/page2_adoption_funnel.png)
+
 *5-stage funnel with revenue risk, device comparison, and time-to-transaction*
 
 ### Page 3: Engagement Drivers
 ![Engagement Drivers](dashboard/screenshots/page3_engagement_drivers.png)
+
 *Feature impact analysis, user segmentation, and 3 hypothesis-driven experiments*
 
 ---
